@@ -18,7 +18,8 @@ export function createServer({apiKey=process.env.OPENAI_API_KEY,model=process.en
  const writeRelay=async(file,value)=>{await mkdir(relayDir,{recursive:true});const tmp=file+'.tmp.'+process.pid+'.'+Date.now();await writeFile(tmp,JSON.stringify(value,null,2)+'\n','utf8');await rename(tmp,file)};
  return http.createServer(async(req,res)=>{
   // Match the pathname rather than the raw URL: browsers may append tracking/query parameters.
-  const route=new URL(req.url,'http://localhost').pathname;
+  const routeUrl=new URL(req.url,'http://localhost');
+  const route=routeUrl.pathname;
   // Requiring JSON prevents cross-site form POSTs from spending API credits.
   if(req.headers.origin&&!['http://localhost:'+req.socket.localPort,'http://127.0.0.1:'+req.socket.localPort].includes(req.headers.origin))return json(res,403,{error:'Origin not allowed'});
   if(req.method==='GET'&&route==='/api/status')return json(res,200,{apiMode:!!apiKey,model:apiKey?model:null,desktopRelay:true});
@@ -38,10 +39,15 @@ export function createServer({apiKey=process.env.OPENAI_API_KEY,model=process.en
    try{
     const answer=await readRelay(relayResponsePath);
     if(Array.isArray(answer?.moves)){
-     // A ChatGPT conversation can plan a whole GPT sequence while the browser tab is sleeping.
-     // Only deliver the queued move matching the latest *browser-submitted* state.
-     const request=await readRelay(relayRequestPath);
-     const next=answer.moves.find(move=>move?.sessionId===request?.sessionId&&move?.stateKey===request?.stateKey);
+     // Match the browser's actual state, even if its preceding state-sync POST failed
+     // or the tab was suspended before a queued follow-up. The client independently
+     // checks the checksum and legal choice before applying a response.
+     const querySession=routeUrl.searchParams.get('sessionId');
+     const queryKey=routeUrl.searchParams.get('stateKey');
+     const request=(!querySession||!queryKey)?await readRelay(relayRequestPath):null;
+     const sessionId=querySession&&queryKey?querySession:request?.sessionId;
+     const stateKey=querySession&&queryKey?queryKey:request?.stateKey;
+     const next=answer.moves.find(move=>move?.sessionId===sessionId&&move?.stateKey===stateKey);
      return json(res,200,next||{ready:false});
     }
     return json(res,200,answer||{ready:false});
