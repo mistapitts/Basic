@@ -1,7 +1,7 @@
 // Optional localhost host and OpenAI Responses API bridge.
 // No API key is ever embedded in, or served to, the browser.
 import http from 'node:http';
-import {readFile,writeFile,rename,mkdir} from 'node:fs/promises';
+import {readFile,writeFile,rename,mkdir,rm} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
 import path from 'node:path';
 import {gameSummary,assertInvariants,currentActor,legalActions} from './engine.mjs';
@@ -11,11 +11,25 @@ const mime={'.html':'text/html; charset=utf-8','.mjs':'text/javascript; charset=
 const json=(res,status,data)=>{res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});res.end(JSON.stringify(data))};
 const prompt=`You are the strategic mind controlling three different players in a four-seat property trading board game against a human at seat 0. They are GPT Ember (bold, seeks monopolies and exciting auctions), GPT Sage (cautious, saves for critical expenses), and GPT Onyx (opportunistic, prefers leverage and rent traps). You must choose exactly ONE legal action for the current acting player by its array index. Work solely from the given snapshot. Try to win, but do not cheat or infer information not in the snapshot. Aim to build full sets, collect rent, use mortgages prudently. Prioritize paying debt before bankruptcy. Do not choose property improvements forever when you need to roll or end. Keep banter witty, under 100 characters. Output JSON conforming to the schema, no markdown.`;
 function checksum(s){const raw=JSON.stringify(gameSummary(s));let hash=2166136261;for(let i=0;i<raw.length;i++){hash^=raw.charCodeAt(i);hash=Math.imul(hash,16777619)}return(hash>>>0).toString(36)}
-export function createServer({apiKey=process.env.OPENAI_API_KEY,model=process.env.OPENAI_MODEL||'gpt-6.1-sol',fetchImpl=fetch,relayDir=root}={}){
+export function createServer({apiKey=process.env.OPENAI_API_KEY,model=process.env.OPENAI_MODEL||'gpt-6.1-sol',fetchImpl=fetch,relayDir=root,renameFile=rename}={}){
  const relayRequestPath=path.join(relayDir,'relay-turn-request.json');
  const relayResponsePath=path.join(relayDir,'relay-turn-response.json');
  const readRelay=async file=>{try{return JSON.parse(await readFile(file,'utf8'))}catch(e){if(e.code==='ENOENT')return null;throw e}};
- const writeRelay=async(file,value)=>{await mkdir(relayDir,{recursive:true});const tmp=file+'.tmp.'+process.pid+'.'+Date.now();await writeFile(tmp,JSON.stringify(value,null,2)+'\n','utf8');await rename(tmp,file)};
+ const writeRelay=async(file,value)=>{
+  await mkdir(relayDir,{recursive:true});
+  const tmp=file+'.tmp.'+process.pid+'.'+Date.now();
+  const data=JSON.stringify(value,null,2)+'\n';
+  try{
+   await writeFile(tmp,data,'utf8');
+   try{await renameFile(tmp,file)}
+   catch(e){
+    if(!['EPERM','EACCES','EEXIST','EBUSY'].includes(e?.code))throw e;
+    // Windows can deny rename over an existing relay file. Fall back to an
+    // in-place replacement; otherwise every second turn stays stuck forever.
+    await writeFile(file,data,'utf8');
+   }
+  }finally{await rm(tmp,{force:true}).catch(()=>{})}
+ };
  return http.createServer(async(req,res)=>{
   // Match the pathname rather than the raw URL: browsers may append tracking/query parameters.
   const routeUrl=new URL(req.url,'http://localhost');
