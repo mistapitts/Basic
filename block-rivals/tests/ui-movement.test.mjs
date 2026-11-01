@@ -21,8 +21,12 @@ function renderTestBoard(state,selected){
  return board.innerHTML;
 }
 function findTile(html,id){
- const match=html.match(new RegExp('<button[^>]*data-tile="'+id+'"[^>]*>[\\s\\S]*?<\\/button>'));
- assert(match,'Tile #'+id+' exists on the board');return match[0];
+ const at=html.indexOf('data-tile="'+id+'"');
+ assert(at>=0,'Tile #'+id+' exists on the board');
+ const start=html.lastIndexOf('<button',at);
+ const end=html.indexOf('</button>',at);
+ assert(start>=0&&end>=0,'Tile #'+id+' has valid markup');
+ return html.slice(start,end+'</button>'.length);
 }
 test('human position marker follows actual coordinates even when inspector still selects old tile',()=>{
  const state=newGame(123);state.players[0].pos=6;
@@ -44,23 +48,21 @@ test('all four pawns show identifiable labels and human location is highlighted'
  const state=newGame(1);
  state.players.forEach((p,i)=>{p.pos=6+i});
  const html=renderTestBoard(state,0);
- assert.match(findTile(html,6),/>YOU<\\/span>/);
- for(const [i,letter] of [[7,'E'],[8,'S'],[9,'O']])assert.match(findTile(html,i),new RegExp('>'+letter+'<\\/span>'));
- assert.match(css,/\\.tile\\.human-location\\{/);
- assert.match(css,/\\.player-position\\{/);
+ assert(findTile(html,6).includes('>YOU</span>'));
+ for(const [i,letter] of [[7,'E'],[8,'S'],[9,'O']])assert(findTile(html,i).includes('>'+letter+'</span>'));
+ assert(css.includes('.tile.human-location{'));
+ assert(css.includes('.player-position{'));
 });
 test('applying a move keeps board selection in step with the position and informs human',()=>{
  const original=newGame(123),next=structuredClone(original);
  original.players[0].pos=6;next.players[0].pos=11;
  let saves=0,renders=0,messages=[];
  const ctx={state:original,selected:6,BOARD,save:()=>saves++,render:()=>renders++,notify:t=>messages.push(t)};
- vm.runInNewContext(actionPart+'\nadoptAction(next,0,6);',{...ctx,next},{timeout:1000});
- // Read the updated values on the shared object rather than the spread copy.
  const args={...ctx,next};
- vm.runInNewContext(actionPart+'\nadoptAction(next,0,6);',args,{timeout:1000});
+ vm.runInNewContext(actionPart+'\\nadoptAction(next,0,6);',args,{timeout:1000});
  assert.equal(args.selected,11);
  assert.equal(args.state.players[0].pos,11);
- assert.equal(messages.length,2);
+ assert.equal(messages.length,1);
  assert.match(messages[0],/Orchid Street/);
- assert.equal(renders,2);assert.equal(saves,2);
+ assert.equal(renders,1);assert.equal(saves,1);
 });
