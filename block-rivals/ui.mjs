@@ -21,20 +21,34 @@ function tilePos(id){if(id<=10)return {col:11-id,row:11};if(id<=20)return {col:1
 function iconFor(sq){return ({go:'↗',jail:'🔒',toJail:'🚓',parking:'🏝',chance:'?',chest:'🎁',tax:'$',station:'🚆',utility:'⚡',property:'⌂'})[sq.type]||'•'}
 function renderBoard(){const pieces=state.players.filter(p=>!p.bankrupt).reduce((o,p)=>(o[p.pos]??=[]).push(p.id)&&o,{});let tiles='';
  BOARD.forEach((sq,id)=>{const pos=tilePos(id),d=state.deeds[id],color=d?.owner!==null&&d?.owner!==undefined?PLAYER_COLORS[d.owner]:null;
- const pegs=(pieces[id]||[]).map(p=>`<span class="pawn" title="${escapeHtml(state.players[p].name)}" style="background:${PLAYER_COLORS[p]}"></span>`).join('');
+ const isHumanHere=id===state.players[0].pos;
+ const pegs=(pieces[id]||[]).map(p=>`<span class="pawn board-pawn ${p===0?'human-pawn':'gpt-pawn'}" title="${escapeHtml(state.players[p].name)} at #${id}" aria-label="${escapeHtml(state.players[p].name)}" style="background:${PLAYER_COLORS[p]}">${p===0?'YOU':state.players[p].name.split(' ').at(-1)[0]}</span>`).join('');
  const band=sq.group?`<span class="color-band" style="background:${GROUPS[sq.group].color}"></span>`:'';
  const status=d?.buildings?`<span class="towers">${d.buildings===5?'🏨':'⌂ ×'+d.buildings}</span>`:'';
- tiles+=`<button class="tile ${['go','jail','toJail','parking'].includes(sq.type)?'corner':sq.type} ${d?.mortgaged?'mortgaged':''} ${id===selected?'selected':''}" style="grid-column:${pos.col};grid-row:${pos.row}" data-tile="${id}" title="${escapeHtml(sq.name)}">
+ tiles+=`<button class="tile ${['go','jail','toJail','parking'].includes(sq.type)?'corner':sq.type} ${d?.mortgaged?'mortgaged':''} ${id===selected?'selected':''} ${isHumanHere?'human-location':''}" ${isHumanHere?'data-human-location="true"':''} style="grid-column:${pos.col};grid-row:${pos.row}" data-tile="${id}" title="${escapeHtml(sq.name)}">
  ${band}<span class="tile-icon">${iconFor(sq)}</span><span class="tile-name">${escapeHtml(sq.name)}</span>${sq.price?`<span class="tile-price">${money(sq.price)}</span>`:''}
- ${color?`<span class="owner-mark" style="background:${color}"></span>`:''}<span class="pawn-stack">${pegs}</span>${status}</button>`});
+ ${color?`<span class="owner-mark" style="background:${color}"></span>`:''}${isHumanHere?'<span class="human-location-label" aria-hidden="true">YOU ARE HERE</span>':''}<span class="pawn-stack">${pegs}</span>${status}</button>`});
  const chips=state.players.map(p=>`<span class="chip ${currentActor(state)===p.id?'active':''}"><i class="pawn" style="background:${PLAYER_COLORS[p.id]}"></i>${escapeHtml(p.name)}</span>`).join('');
  const dice=state.lastRoll[0]===0?'—':state.lastRoll.join(' + ');
  const center=`<div class="board-center"><div class="hero-icon">🎩</div><div class="center-title">BLOCK<br>RIVALS</div><div class="subtitle">A property game against GPT</div><div class="center-boxes"><div class="center-box"><strong>${money(state.pot)}</strong><span>🏝 Vacation Fund</span></div><div class="center-box"><strong>${dice}</strong><span>🎲 Last roll</span></div></div><div class="center-chips">${chips}</div></div>`;
  $('#board').innerHTML=tiles+center;
  document.querySelectorAll('[data-tile]').forEach(el=>el.addEventListener('click',()=>{selected=+el.dataset.tile;render()}));
 }
-function renderPlayers(){const active=currentActor(state);$('#players').innerHTML=state.players.map(p=>`<div class="player ${active===p.id?'active':''} ${p.bankrupt?'broke':''}"><div class="player-line"><span class="player-dot" style="background:${PLAYER_COLORS[p.id]}"></span><span class="player-name">${escapeHtml(p.name)}</span></div><div class="player-money">${money(p.cash)}</div><div class="player-sub">${money(playerNetWorth(state,p.id))} net worth · ${Object.values(state.deeds).filter(d=>d.owner===p.id).length} deeds ${p.inJail?'· 🔒 Jail':''} ${p.bankrupt?'· OUT':''}</div></div>`).join('')}
-function chooseAction(type,rest={}){if(aiBusy)return;try{state=applyAction(state,{type,...rest});save();render()}catch(e){notify(e.message,true)}}
+function renderPlayers(){const active=currentActor(state);$('#players').innerHTML=state.players.map(p=>`<div class="player ${active===p.id?'active':''} ${p.bankrupt?'broke':''}"><div class="player-line"><span class="player-dot" style="background:${PLAYER_COLORS[p.id]}"></span><span class="player-name">${escapeHtml(p.name)}</span></div><div class="player-money">${money(p.cash)}</div><div class="player-sub">${money(playerNetWorth(state,p.id))} net worth · ${Object.values(state.deeds).filter(d=>d.owner===p.id).length} deeds ${p.inJail?'· 🔒 Jail':''} ${p.bankrupt?'· OUT':''}</div><div class="player-position">${p.id===0?'📍 YOU':'📍 '+escapeHtml(p.name.split(' ').at(-1))} · #${p.pos} ${escapeHtml(BOARD[p.pos].name)}</div></div>`).join('')}
+function adoptAction(next,moverId,oldPos){
+ const landed=next.players[moverId]?.pos;
+ state=next;
+ if(Number.isInteger(landed)&&landed!==oldPos){
+  // Selection follows a move, but the human's permanent locator is independent.
+  selected=landed;
+  if(moverId===0)notify('Your piece moved to #'+landed+' · '+BOARD[landed].name);
+ }
+ save();render();
+}
+function chooseAction(type,rest={}){if(aiBusy)return;try{
+ const moverId=currentActor(state),oldPos=state.players[moverId].pos;
+ adoptAction(applyAction(state,{type,...rest}),moverId,oldPos);
+ }catch(e){notify(e.message,true)}}
 function actionLabel(a){if(a.type==='bid')return `Bid ${money(a.amount)}`;return ({roll:'🎲 Roll dice',tryDoubles:'🎲 Try for doubles',payBail:'Pay $50 bail',useCard:'Use jail pass',buy:'🏠 Buy property',startAuction:'🔨 Start auction',passAuction:'Pass / leave auction',end:'End turn →',mortgage:'Mortgage',unmortgage:'Redeem mortgage',build:'Build house / hotel',sell:'Sell building',payDebt:'Pay full debt',bankrupt:'Declare bankruptcy',acceptTrade:'Accept trade',declineTrade:'Decline trade'})[a.type]||a.type}
 function makeButton(parent,a,label,style=''){const btn=document.createElement('button');btn.className='btn '+style;btn.textContent=label||actionLabel(a);btn.onclick=()=>chooseAction(a.type,Object.fromEntries(Object.entries(a).filter(([k])=>k!=='type')));parent.appendChild(btn);return btn}
 function renderControls(){const actId=currentActor(state),p=state.players[actId],isHuman=actId===0,choices=legalActions(state);
@@ -107,18 +121,22 @@ async function pollRelay(){
   const data=await res.json();if(data.sessionId!==relaySessionId||data.stateKey!==key||!Number.isInteger(data.choice))return;
   const moves=legalActions(state);if(data.choice<0||data.choice>=moves.length)return;
   const actor=state.players[currentActor(state)].name;lastBanter=actor+': '+String(data.banter||'').slice(0,180);
-  state=applyAction(state,moves[data.choice]);relayRequestedKey='';save();render();
+  const moverId=currentActor(state),oldPos=state.players[moverId].pos;
+  relayRequestedKey='';adoptAction(applyAction(state,moves[data.choice]),moverId,oldPos);
  }catch(e){console.warn('Relay polling:',e)}finally{relayPolling=false}
 }
 setInterval(()=>{void pollRelay()},1500);
 async function apiChoose(){const res=await fetch('/api/choose',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({state})});const data=await res.json().catch(()=>({error:'Unexpected response'}));if(!res.ok)throw new Error(data.error||`HTTP ${res.status}`);
  if(data.stateKey!==summaryId())throw new Error('API returned a move for a stale board.');const opts=legalActions(state);if(!Number.isInteger(data.choice)||data.choice<0||data.choice>=opts.length)throw new Error('API returned an invalid move.');return {choice:opts[data.choice],banter:String(data.banter||'').slice(0,180)}}
 async function runAutomatic(){if(!apiReady||aiBusy)return;aiBusy=true;stopAi=false;$('#aiBusy').classList.remove('hidden');render();let steps=0;
- try{while(!stopAi&&state.phase!=='gameover'&&currentActor(state)!==0&&steps++<50){const a=await apiChoose();lastBanter=`${state.players[currentActor(state)].name}: ${a.banter}`;state=applyAction(state,a.choice);save();aiCount++;render();await new Promise(resolve=>setTimeout(resolve,180));}
+ try{while(!stopAi&&state.phase!=='gameover'&&currentActor(state)!==0&&steps++<50){const a=await apiChoose();lastBanter=`${state.players[currentActor(state)].name}: ${a.banter}`;
+  const moverId=currentActor(state),oldPos=state.players[moverId].pos;
+  adoptAction(applyAction(state,a.choice),moverId,oldPos);aiCount++;await new Promise(resolve=>setTimeout(resolve,180));}
  if(steps>=50)notify('Paused after 50 model decisions to avoid unexpected API charges.');
  }catch(e){notify('AI request failed: '+e.message,true)}finally{aiBusy=false;render()}}
 $('#copyPrompt').addEventListener('click',async()=>{const prompt=createPrompt();const ok=await copyText(prompt);if(ok)notify('Copied! Paste into this ChatGPT chat and return with my JSON move.');else{$('#pasteMove').value=prompt;notify('Clipboard denied. Copy the generated text from the box.',true)}});
-$('#applyMove').addEventListener('click',()=>{if(aiBusy)return;try{const a=parseResponse($('#pasteMove').value);lastBanter=`${state.players[currentActor(state)].name}: ${a.banter}`;state=applyAction(state,a.choice);$('#pasteMove').value='';save();render();notify('GPT move applied.')}catch(e){notify(e.message,true)}});
+$('#applyMove').addEventListener('click',()=>{if(aiBusy)return;try{const a=parseResponse($('#pasteMove').value);lastBanter=`${state.players[currentActor(state)].name}: ${a.banter}`;const moverId=currentActor(state),oldPos=state.players[moverId].pos;
+  $('#pasteMove').value='';adoptAction(applyAction(state,a.choice),moverId,oldPos);notify('GPT move applied.')}catch(e){notify(e.message,true)}});
 $('#autoPlay').addEventListener('click',runAutomatic);$('#stopAuto').addEventListener('click',()=>{stopAi=true;notify('Will stop after the current model request finishes.')});
 $('#tradeTarget').addEventListener('change',()=>renderTrade());
 $('#sendTrade').addEventListener('click',()=>{
