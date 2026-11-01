@@ -1,0 +1,103 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {createServer} from '../server.mjs';
+import {mkdtemp,readFile,writeFile,rm,rename,readdir} from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import {newGame,applyAction,gameSummary} from '../engine.mjs';
+async function withServer(options,fn){const server=createServer(options);await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));const url=`http://127.0.0.1:${server.address().port}`;try{await fn(url)}finally{await new Promise(resolve=>server.close(resolve))}}
+test('web server serves game assets, status, no key exposure',()=>withServer({apiKey:''},async url=>{
+ const status=await (await fetch(url+'/api/status')).json();assert.deepEqual(status,{apiMode:false,model:null,desktopRelay:true});
+ const page=await (await fetch(url+'/')).text();assert(page.includes('Block Rivals'));assert(page.includes('ui.mjs'));
+ const tracked=await fetch(url+'/?utm_source=chatgpt.com&utm_medium=link');assert.equal(tracked.status,200);assert.equal(await tracked.text(),page);
+ const trackedAsset=await fetch(url+'/ui.mjs?cache=1');assert.equal(trackedAsset.status,200);assert.match(await trackedAsset.text(),/render/);
+ const trackedStatus=await fetch(url+'/api/status?ignore=1');assert.equal(trackedStatus.status,200);
+ const notFound=await fetch(url+'/no-page?utm_source=x');assert.equal(notFound.status,404);
+ const js=await (await fetch(url+'/engine.mjs')).text();assert(js.includes('legalActions'));
+ const hidden=await fetch(url+'/server.mjs');assert.equal(hidden.status,404);
+ const unavailable=await fetch(url+'/api/choose',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});assert.equal(unavailable.status,503);
+}));
+test('server validates OpenAI action and never accepts a human turn',()=>withServer({apiKey:'test-key',fetchImpl:async()=>{throw new Error('Should never be called on human turn')}},async url=>{
+ const status=await (await fetch(url+'/api/status')).json();assert.equal(status.apiMode,true);
+ const bad=await fetch(url+'/api/choose',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({state:newGame(1)})});assert.equal(bad.status,400);
+ const wrongOrigin=await fetch(url+'/api/choose',{method:'POST',headers:{'Content-Type':'application/json','Origin':'https://evil.example'},body:JSON.stringify({state:newGame(1)})});assert.equal(wrongOrigin.status,403);
+}));
+test('AI bridge makes structured model request, returns in-bounds decision',()=>withServer({apiKey:'test-key',model:'test-model',fetchImpl:async(url,init)=>{
+ assert.equal(url,'https://api.openai.com/v1/responses');assert.equal(init.headers.Authorization,'Bearer test-key');
+ const req=JSON.parse(init.body);assert.equal(req.model,'test-model');assert.equal(req.text.format.type,'json_schema');const parsed=JSON.parse(req.input);assert(parsed.choices.length>0);assert.equal(parsed.snapshot.acting,'GPT · Ember');
+ return {ok:true,json:async()=>({output:[{type:'message',content:[{type:'output_text',text:JSON.stringify({choice:0,banter:'The streets will be mine.'})}]}]})};
+ }},async url=>{let s=newGame(1);s.turn=1;const r=await fetch(url+'/api/choose',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({state:s})});assert.equal(r.status,200);const data=await r.json();assert.equal(data.choice,0);assert.equal(data.banter,'The streets will be mine.');assert.match(data.stateKey,/^[a-z0-9]+$/)}));
+test('OpenAI invalid choice rejected (never secretly executes scripted substitute)',()=>withServer({apiKey:'test-key',fetchImpl:async()=>({ok:true,json:async()=>({output:[{type:'message',content:[{type:'output_text',text:JSON.stringify({choice:999,banter:''})}]}]})})},async url=>{let s=newGame(1);s.turn=1;const r=await fetch(url+'/api/choose',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({state:s})});assert.equal(r.status,400);assert.match((await r.json()).error,/invalid legal action/)}));
+test('Desktop Commander relay stores validated turn state and serves the matching GPT reply',async()=>{
+ const relayDir=await mkdtemp(path.join(os.tmpdir(),'block-rivals-relay-'));
+ try{await withServer({apiKey:'',relayDir},async url=>{
+  const state=newGame(1);state.turn=1;
+  const {gameSummary}=await import('../engine.mjs');
+  const raw=JSON.stringify(gameSummary(state));let hash=2166136261;for(let i=0;i<raw.length;i++){hash^=raw.charCodeAt(i);hash=Math.imul(hash,16777619)}const stateKey=(hash>>>0).toString(36);
+  const payload={sessionId:'game-1234567890abcd',stateKey,state};
+  const post=await fetch(url+'/api/relay/request',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+  assert.equal(post.status,200);
+  const stored=JSON.parse(await readFile(path.join(relayDir,'relay-turn-request.json'),'utf8'));
+  assert.equal(stored.stateKey,stateKey);assert.equal(stored.sessionId,payload.sessionId);
+  assert.equal(stored.snapshot.acting,'GPT · Ember');assert.equal(stored.legalActions[0].type,'roll');
+  const answer={sessionId:payload.sessionId,stateKey,choice:0,banter:'I came to own the block.'};
+  await writeFile(path.join(relayDir,'relay-turn-response.json'),JSON.stringify(answer));
+  const reply=await (await fetch(url+'/api/relay/response')).json();assert.deepEqual(reply,answer);
+  const wrong=await fetch(url+'/api/relay/request',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...payload,stateKey:'stale'})});assert.equal(wrong.status,400);
+  const human=await fetch(url+'/api/relay/request',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...payload,state:newGame(2)})});assert.equal(human.status,400);
+ });}finally{await rm(relayDir,{recursive:true,force:true})}
+});
+
+test('queued ChatGPT moves follow only the latest browser-submitted checksum',async()=>{
+ const relayDir=await mkdtemp(path.join(os.tmpdir(),'block-rivals-queue-'));
+ const hashFor=s=>{const raw=JSON.stringify(gameSummary(s));let h=2166136261;for(let i=0;i<raw.length;i++){h^=raw.charCodeAt(i);h=Math.imul(h,16777619)}return(h>>>0).toString(36)};
+ try{await withServer({apiKey:'',relayDir},async url=>{
+  const first=newGame(1);first.turn=1;
+  const second=applyAction(first,{type:'roll'});
+  const sid='game-abcdef1234567890';
+  const keys=[hashFor(first),hashFor(second)];
+  await writeFile(path.join(relayDir,'relay-turn-response.json'),JSON.stringify({moves:[
+    {sessionId:sid,stateKey:keys[0],choice:0,banter:'Ember rolls'},
+    {sessionId:sid,stateKey:keys[1],choice:0,banter:'Ember continues'}
+  ]}));
+  const send=async state=>fetch(url+'/api/relay/request',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sessionId:sid,stateKey:hashFor(state),state})});
+  assert.equal((await send(first)).status,200);
+  const reply1=await (await fetch(url+'/api/relay/response')).json();assert.equal(reply1.stateKey,keys[0]);
+  // Regression: the browser advanced locally, but its second state-sync request never arrived.
+  // The queued second move must still be deliverable by its exact session/checksum.
+  const query=stateKey=>'/api/relay/response?'+new URLSearchParams({sessionId:sid,stateKey});
+  const recovered=await (await fetch(url+query(keys[1]))).json();
+  assert.equal(recovered.stateKey,keys[1]);
+  assert.equal(recovered.banter,'Ember continues');
+  assert.deepEqual(await (await fetch(url+query('wrong-key'))).json(),{ready:false});
+  assert.deepEqual(await (await fetch(url+'/api/relay/response?sessionId=other-player&stateKey='+keys[1])).json(),{ready:false});
+  assert.equal((await send(second)).status,200);
+  const reply2=await (await fetch(url+'/api/relay/response')).json();assert.equal(reply2.stateKey,keys[1]);
+  const missing=JSON.parse(await readFile(path.join(relayDir,'relay-turn-response.json'),'utf8'));missing.moves.length=1;
+  await writeFile(path.join(relayDir,'relay-turn-response.json'),JSON.stringify(missing));
+  assert.deepEqual(await (await fetch(url+'/api/relay/response')).json(),{ready:false});
+ });}finally{await rm(relayDir,{recursive:true,force:true})}
+});
+
+test('Windows EPERM rename fallback updates the relay on subsequent turns and cleans temp files',async()=>{
+ const relayDir=await mkdtemp(path.join(os.tmpdir(),'block-rivals-windows-'));
+ let attempts=0;
+ const renameFile=async(from,to)=>{
+  attempts++;
+  if(attempts>1){const e=new Error('Windows: cannot replace existing relay file');e.code='EPERM';throw e}
+  return rename(from,to);
+ };
+ const hashFor=s=>{const raw=JSON.stringify(gameSummary(s));let h=2166136261;for(let i=0;i<raw.length;i++){h^=raw.charCodeAt(i);h=Math.imul(h,16777619)}return(h>>>0).toString(36)};
+ try{await withServer({apiKey:'',relayDir,renameFile},async url=>{
+  const initial=newGame(1);initial.turn=1;
+  const purchase=applyAction(initial,{type:'roll'});
+  const sessionId='game-eprem-session-1234';
+  const send=async state=>fetch(url+'/api/relay/request',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({state,sessionId,stateKey:hashFor(state)})});
+  assert.equal((await send(initial)).status,200,'initial request succeeds');
+  const second=await send(purchase);
+  assert.equal(second.status,200,'replacement request must not fail with EPERM');
+  assert.equal(JSON.parse(await readFile(path.join(relayDir,'relay-turn-request.json'),'utf8')).stateKey,hashFor(purchase));
+  assert.equal((await readdir(relayDir)).filter(name=>name.includes('.tmp.')).length,0,'failed temporary rename cleaned up');
+  assert.equal(attempts,2);
+ });}finally{await rm(relayDir,{force:true,recursive:true})}
+});

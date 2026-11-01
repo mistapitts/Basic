@@ -1,0 +1,13 @@
+{
+  "name": "block-rivals",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Four-player property board game: you vs three GPT characters, with in-chat relay or optional local API bridge",
+  "scripts": {
+    "test": "node --test tests/*.test.mjs",
+    "start": "node server.mjs",
+    "build": "node build.mjs"
+  },
+  "engines": { "node": ">=20" }
+}
