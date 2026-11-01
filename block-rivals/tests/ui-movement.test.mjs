@@ -16,7 +16,7 @@ const money=n=>'$'+Number(n||0).toLocaleString('en-US');
 function renderTestBoard(state,selected){
  const board={innerHTML:''};
  const document={querySelector:s=>s==='#board'?board:null,querySelectorAll:()=>[]};
- const ctx={state,selected,document,BOARD,GROUPS,PLAYER_COLORS,currentActor,money,escapeHtml};
+ const ctx={state,selected,document,$:selector=>document.querySelector(selector),BOARD,GROUPS,PLAYER_COLORS,currentActor,money,escapeHtml};
  vm.runInNewContext(boardPart+'\nrenderBoard();',ctx,{timeout:1000});
  return board.innerHTML;
 }
@@ -59,7 +59,7 @@ test('applying a move keeps board selection in step with the position and inform
  let saves=0,renders=0,messages=[];
  const ctx={state:original,selected:6,BOARD,save:()=>saves++,render:()=>renders++,notify:t=>messages.push(t)};
  const args={...ctx,next};
- vm.runInNewContext(actionPart+'\\nadoptAction(next,0,6);',args,{timeout:1000});
+ vm.runInNewContext(actionPart+';adoptAction(next,0,6);',args,{timeout:1000});
  assert.equal(args.selected,11);
  assert.equal(args.state.players[0].pos,11);
  assert.equal(messages.length,1);
