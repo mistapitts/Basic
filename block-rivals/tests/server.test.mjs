@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createServer} from '../server.mjs';
-import {mkdtemp,readFile,writeFile,rm} from 'node:fs/promises';
+import {mkdtemp,readFile,writeFile,rm,rename,readdir} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {newGame,applyAction,gameSummary} from '../engine.mjs';
@@ -77,4 +77,27 @@ test('queued ChatGPT moves follow only the latest browser-submitted checksum',as
   await writeFile(path.join(relayDir,'relay-turn-response.json'),JSON.stringify(missing));
   assert.deepEqual(await (await fetch(url+'/api/relay/response')).json(),{ready:false});
  });}finally{await rm(relayDir,{recursive:true,force:true})}
+});
+
+test('Windows EPERM rename fallback updates the relay on subsequent turns and cleans temp files',async()=>{
+ const relayDir=await mkdtemp(path.join(os.tmpdir(),'block-rivals-windows-'));
+ let attempts=0;
+ const renameFile=async(from,to)=>{
+  attempts++;
+  if(attempts>1){const e=new Error('Windows: cannot replace existing relay file');e.code='EPERM';throw e}
+  return rename(from,to);
+ };
+ const hashFor=s=>{const raw=JSON.stringify(gameSummary(s));let h=2166136261;for(let i=0;i<raw.length;i++){h^=raw.charCodeAt(i);h=Math.imul(h,16777619)}return(h>>>0).toString(36)};
+ try{await withServer({apiKey:'',relayDir,renameFile},async url=>{
+  const initial=newGame(1);initial.turn=1;
+  const purchase=applyAction(initial,{type:'roll'});
+  const sessionId='game-eprem-session-1234';
+  const send=async state=>fetch(url+'/api/relay/request',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({state,sessionId,stateKey:hashFor(state)})});
+  assert.equal((await send(initial)).status,200,'initial request succeeds');
+  const second=await send(purchase);
+  assert.equal(second.status,200,'replacement request must not fail with EPERM');
+  assert.equal(JSON.parse(await readFile(path.join(relayDir,'relay-turn-request.json'),'utf8')).stateKey,hashFor(purchase));
+  assert.equal((await readdir(relayDir)).filter(name=>name.includes('.tmp.')).length,0,'failed temporary rename cleaned up');
+  assert.equal(attempts,2);
+ });}finally{await rm(relayDir,{force:true,recursive:true})}
 });
