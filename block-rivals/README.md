@@ -12,6 +12,19 @@
 
 This **chat relay mode genuinely uses your current ChatGPT conversation** to make strategic decisions for all three GPT seats. A browser page cannot independently read this chat or pull future ChatGPT replies, so copy/paste is required. The game itself never secretly substitutes scripted bots for the GPT opponents.
 
+## Zero-copy play against this chat (Desktop Commander bridge)
+
+This is the recommended way to play *against this exact ChatGPT conversation*, without copying turn prompts or model replies.
+
+1. Run `npm start` **without an API key**, and open `http://127.0.0.1:8787` on the same Windows PC. (Node 20+ required.)
+2. When a GPT seat becomes active, the browser automatically posts its current validated game state to `relay-turn-request.json` in this folder. The state is complete: legal moves, scores, owners, phase, log, etc.
+3. In the ChatGPT conversation, say **“Your turn.”** The assistant uses its authorized Desktop Commander connection to read that file and write its strategic move as `relay-turn-response.json`.
+4. The browser polls locally, checks the session, checksum and legality, and executes the move. If another GPT move is needed it publishes the next request automatically. One conversation wake can handle multiple sequential decisions as the game progresses.
+
+The reply file format is JSON: `{"sessionId":"...","stateKey":"...","choice":0,"banter":"..."}`. Copy the `sessionId` and `stateKey` unchanged from the live request and choose a zero-based index from `legalActions`. **Never assume a move succeeded until the next request or browser display confirms it.** The browser stores saves in its own origin, so if you previously played the offline `file://` version, **export your game there and import it at localhost once**.
+
+The HTTP server binds only to `127.0.0.1`; nothing is exposed on the LAN. No token, API key or paid model service is necessary for this relay. This is *not* live observation: ChatGPT reads the snapshot on explicit wake, and the server itself never calls ChatGPT. If Desktop Commander disconnects, switch to the manual relay or reconnect it.
+
 ## Optional: automatic OpenAI model opponents
 
 To avoid copying decisions, you can host the local server and connect a **separate API model session**. This uses OpenAI API credits (separately billed from ChatGPT subscriptions). It is still a GPT model, but it is *not the same live conversation* as your chat above.
