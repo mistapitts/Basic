@@ -96,17 +96,21 @@ async function offerRelayTurn(){
  }catch(e){$('#relayStatus').textContent='Relay connection failed: '+e.message;relayRequestedKey=''}finally{relayPosting=false}
 }
 async function pollRelay(){
- if(!relayReady||aiBusy||relayPolling||relayPosting||state.phase==='gameover'||currentActor(state)===0)return;
- const key=summaryId();if(relayRequestedKey!==key)return;
+ if(!relayReady||aiBusy||relayPolling||state.phase==='gameover'||currentActor(state)===0)return;
+ const key=summaryId();
+ // Every tick re-attempts a missing state handoff; the queued answer can still
+ // arrive independently of that handoff, so we never deadlock after a move.
+ if(relayRequestedKey!==key&&!relayPosting)void offerRelayTurn();
  relayPolling=true;
- try{const res=await fetch('/api/relay/response',{cache:'no-store'});if(!res.ok)return;
+ try{const query=new URLSearchParams({sessionId:relaySessionId,stateKey:key});
+  const res=await fetch('/api/relay/response?'+query.toString(),{cache:'no-store'});if(!res.ok)return;
   const data=await res.json();if(data.sessionId!==relaySessionId||data.stateKey!==key||!Number.isInteger(data.choice))return;
   const moves=legalActions(state);if(data.choice<0||data.choice>=moves.length)return;
   const actor=state.players[currentActor(state)].name;lastBanter=actor+': '+String(data.banter||'').slice(0,180);
   state=applyAction(state,moves[data.choice]);relayRequestedKey='';save();render();
  }catch(e){console.warn('Relay polling:',e)}finally{relayPolling=false}
 }
-setInterval(()=>{void pollRelay()},2200);
+setInterval(()=>{void pollRelay()},1500);
 async function apiChoose(){const res=await fetch('/api/choose',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({state})});const data=await res.json().catch(()=>({error:'Unexpected response'}));if(!res.ok)throw new Error(data.error||`HTTP ${res.status}`);
  if(data.stateKey!==summaryId())throw new Error('API returned a move for a stale board.');const opts=legalActions(state);if(!Number.isInteger(data.choice)||data.choice<0||data.choice>=opts.length)throw new Error('API returned an invalid move.');return {choice:opts[data.choice],banter:String(data.banter||'').slice(0,180)}}
 async function runAutomatic(){if(!apiReady||aiBusy)return;aiBusy=true;stopAi=false;$('#aiBusy').classList.remove('hidden');render();let steps=0;
