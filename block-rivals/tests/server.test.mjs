@@ -63,6 +63,14 @@ test('queued ChatGPT moves follow only the latest browser-submitted checksum',as
   const send=async state=>fetch(url+'/api/relay/request',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sessionId:sid,stateKey:hashFor(state),state})});
   assert.equal((await send(first)).status,200);
   const reply1=await (await fetch(url+'/api/relay/response')).json();assert.equal(reply1.stateKey,keys[0]);
+  // Regression: the browser advanced locally, but its second state-sync request never arrived.
+  // The queued second move must still be deliverable by its exact session/checksum.
+  const query=stateKey=>'/api/relay/response?'+new URLSearchParams({sessionId:sid,stateKey});
+  const recovered=await (await fetch(url+query(keys[1]))).json();
+  assert.equal(recovered.stateKey,keys[1]);
+  assert.equal(recovered.banter,'Ember continues');
+  assert.deepEqual(await (await fetch(url+query('wrong-key'))).json(),{ready:false});
+  assert.deepEqual(await (await fetch(url+'/api/relay/response?sessionId=other-player&stateKey='+keys[1])).json(),{ready:false});
   assert.equal((await send(second)).status,200);
   const reply2=await (await fetch(url+'/api/relay/response')).json();assert.equal(reply2.stateKey,keys[1]);
   const missing=JSON.parse(await readFile(path.join(relayDir,'relay-turn-response.json'),'utf8'));missing.moves.length=1;
