@@ -8,6 +8,10 @@ try{const raw=JSON.parse(localStorage.getItem(storageKey));if(raw){assertInvaria
 state ||=newGame();
 let selected=state.players[0].pos;
 let apiReady=false,apiModel='';let aiBusy=false,stopAi=false,aiCount=0,lastBanter='';
+let relayReady=false,relayRequestedKey='',relayPosting=false,relayPolling=false;
+let relaySessionId;try{relaySessionId=localStorage.getItem('block-rivals-relay-session')}catch{}
+if(!relaySessionId){relaySessionId='game-'+(globalThis.crypto?.randomUUID?.()||Math.random().toString(36).slice(2)+Date.now().toString(36));try{localStorage.setItem('block-rivals-relay-session',relaySessionId)}catch{}}
+
 let toastTimeout;
 function notify(message,error=false){const el=$('#toast');el.textContent=message;el.className='toast'+(error?' error':'');clearTimeout(toastTimeout);toastTimeout=setTimeout(()=>el.className='toast hidden',4200)}
 function save(){try{localStorage.setItem(storageKey,JSON.stringify(state))}catch(e){console.warn('Cannot autosave:',e)}}
@@ -38,8 +42,11 @@ function renderControls(){const actId=currentActor(state),p=state.players[actId]
  $('#turnphase').textContent=`ROUND ${state.round} • ${phaseLabel().toUpperCase()}`;$('#turnhelp').textContent=phaseHelp();
  const actionBox=$('#actions');actionBox.innerHTML='';$('#auctionControls').innerHTML='';$('#aiPanel').classList.toggle('hidden',isHuman||state.phase==='gameover');
  $('#humanSubpanels').classList.toggle('hidden',!isHuman||state.phase==='gameover');
+ $('#relayBox').classList.toggle('hidden',!relayReady||isHuman||state.phase==='gameover');
  if(state.phase==='gameover'){$('#actions').innerHTML='<div class="winner">🏆 Winner: '+escapeHtml(state.players[state.winner]?.name||'Nobody')+'</div>';return}
- if(!isHuman){$('#aiActor').textContent=`${p.name}'s decision`;$('#aiType').textContent=apiReady?'Optional automatic API play, or use this exact chat via copy/paste.':'Playing through this exact ChatGPT chat: copy the decision prompt, paste it here, then return the JSON reply.';
+ if(!isHuman){$('#aiActor').textContent=`${p.name}'s decision`;$('#aiType').textContent=relayReady?'Live sync sends this position to ChatGPT through Desktop Commander.':'Copy your current position into ChatGPT (or run the local server for automatic live sync).';
+  $('#relayBox').classList.toggle('hidden',!relayReady);
+  if(relayReady)$('#relayStatus').textContent=relayRequestedKey===summaryId()?'Board delivered. Say “Your turn” in ChatGPT; the response will appear here automatically.':'Sending the latest board to ChatGPT…';
   $('#apiControls').classList.toggle('hidden',!apiReady);$('#apiModel').textContent=apiModel;$('#aiBusy').classList.toggle('hidden',!aiBusy);return;}
  if(state.phase==='auction'){
   const min=state.auction.bid+1,body=$('#auctionControls');body.innerHTML=`<label class="label" for="bidAmount">Your next bid (minimum ${money(min)}; cash ${money(p.cash)})</label><div class="row"><input class="input small" id="bidAmount" type="number" min="${min}" max="${p.cash}" value="${Math.min(p.cash,Math.max(min,Math.round(min/10)*10))}" step="1"><button class="btn primary" id="submitBid">Bid now</button></div>`;
@@ -79,7 +86,27 @@ function parseResponse(raw){let data;const trimmed=raw.trim().replace(/^```(?:js
  if(!data||data.stateKey!==summaryId())throw new Error('That reply is for a different game position. Copy a fresh prompt.');const choices=legalActions(state);
  if(!Number.isInteger(data.choice)||data.choice<0||data.choice>=choices.length)throw new Error('The action number is not legal.');return {choice:choices[data.choice],banter:String(data.banter||'').slice(0,180)}}
 function renderLog(){const lines=state.log.slice(-13).reverse();$('#gameLog').innerHTML=lines.map(l=>`<li>${escapeHtml(l)}</li>`).join('');$('#lastBanter').textContent=lastBanter?'💬 '+lastBanter:'';}
-function render(){renderBoard();renderPlayers();renderControls();renderInspector();renderTrade();renderLog();$('#houseSupply').textContent=`${state.bankHouses} houses · ${state.bankHotels} hotels left`;$('#apiStatus').textContent=apiReady?'API model available':'Chat relay ready';$('#round').textContent='Round '+state.round}
+function render(){renderBoard();renderPlayers();renderControls();renderInspector();renderTrade();renderLog();$('#houseSupply').textContent=`${state.bankHouses} houses · ${state.bankHotels} hotels left`;$('#apiStatus').textContent=relayReady?'Desktop relay connected':apiReady?'API model available':'Chat relay ready';$('#round').textContent='Round '+state.round;if(relayReady)void offerRelayTurn()}
+async function offerRelayTurn(){
+ if(!relayReady||aiBusy||relayPosting||state.phase==='gameover'||currentActor(state)===0)return;
+ const key=summaryId();if(relayRequestedKey===key)return;
+ relayPosting=true;
+ try{const res=await fetch('/api/relay/request',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sessionId:relaySessionId,stateKey:key,state})});const data=await res.json();if(!res.ok)throw new Error(data.error||'Relay request failed');
+  relayRequestedKey=key;$('#relayStatus').textContent='Board delivered. Say “Your turn” in ChatGPT; it can reply directly to the game.';
+ }catch(e){$('#relayStatus').textContent='Relay connection failed: '+e.message;relayRequestedKey=''}finally{relayPosting=false}
+}
+async function pollRelay(){
+ if(!relayReady||aiBusy||relayPolling||relayPosting||state.phase==='gameover'||currentActor(state)===0)return;
+ const key=summaryId();if(relayRequestedKey!==key)return;
+ relayPolling=true;
+ try{const res=await fetch('/api/relay/response',{cache:'no-store'});if(!res.ok)return;
+  const data=await res.json();if(data.sessionId!==relaySessionId||data.stateKey!==key||!Number.isInteger(data.choice))return;
+  const moves=legalActions(state);if(data.choice<0||data.choice>=moves.length)return;
+  const actor=state.players[currentActor(state)].name;lastBanter=actor+': '+String(data.banter||'').slice(0,180);
+  state=applyAction(state,moves[data.choice]);relayRequestedKey='';save();render();
+ }catch(e){console.warn('Relay polling:',e)}finally{relayPolling=false}
+}
+setInterval(()=>{void pollRelay()},2200);
 async function apiChoose(){const res=await fetch('/api/choose',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({state})});const data=await res.json().catch(()=>({error:'Unexpected response'}));if(!res.ok)throw new Error(data.error||`HTTP ${res.status}`);
  if(data.stateKey!==summaryId())throw new Error('API returned a move for a stale board.');const opts=legalActions(state);if(!Number.isInteger(data.choice)||data.choice<0||data.choice>=opts.length)throw new Error('API returned an invalid move.');return {choice:opts[data.choice],banter:String(data.banter||'').slice(0,180)}}
 async function runAutomatic(){if(!apiReady||aiBusy)return;aiBusy=true;stopAi=false;$('#aiBusy').classList.remove('hidden');render();let steps=0;
@@ -94,8 +121,8 @@ $('#sendTrade').addEventListener('click',()=>{
  const to=Number($('#tradeTarget').value),give=[...document.querySelectorAll('.tradeGive:checked')].map(el=>+el.value),take=[...document.querySelectorAll('.tradeTake:checked')].map(el=>+el.value);
  chooseAction('offerTrade',{to,give,take,giveCash:Number($('#giveCash').value),takeCash:Number($('#takeCash').value)});
 });
-$('#restart').addEventListener('click',()=>{if(!confirm('Start a new game? Your current saved game will be replaced.'))return;state=newGame();selected=0;lastBanter='';save();render();notify('New game started. Good luck!')});
+$('#restart').addEventListener('click',()=>{if(!confirm('Start a new game? Your current saved game will be replaced.'))return;state=newGame();selected=0;lastBanter='';relayRequestedKey='';save();render();notify('New game started. Good luck!')});
 $('#export').addEventListener('click',()=>{const b=new Blob([JSON.stringify(state,null,2)],{type:'application/json'});const url=URL.createObjectURL(b);const a=document.createElement('a');a.href=url;a.download='block-rivals-save.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),2000)});
-$('#import').addEventListener('change',async e=>{const file=e.target.files[0];if(!file)return;try{const raw=JSON.parse(await file.text());assertInvariants(raw);if(!raw.version||raw.version!==1)throw new Error('Unsupported save version');state=raw;selected=state.players[0].pos;save();render();notify('Saved game imported')}catch(e){notify('Save rejected: '+e.message,true)}e.target.value=''});
-async function discoverAPI(){if(location.protocol==='file:')return;try{const r=await fetch('/api/status',{cache:'no-store'});const j=await r.json();apiReady=!!j.apiMode;apiModel=j.model||'';render()}catch{apiReady=false;render()}}
+$('#import').addEventListener('change',async e=>{const file=e.target.files[0];if(!file)return;try{const raw=JSON.parse(await file.text());assertInvariants(raw);if(!raw.version||raw.version!==1)throw new Error('Unsupported save version');state=raw;selected=state.players[0].pos;relayRequestedKey='';save();render();notify('Saved game imported')}catch(e){notify('Save rejected: '+e.message,true)}e.target.value=''});
+async function discoverAPI(){if(location.protocol==='file:')return;try{const r=await fetch('/api/status',{cache:'no-store'});const j=await r.json();apiReady=!!j.apiMode;apiModel=j.model||'';relayReady=!!j.desktopRelay;render()}catch{apiReady=false;relayReady=false;render()}}
 render();discoverAPI();
