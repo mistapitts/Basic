@@ -35,8 +35,17 @@ export function createServer({apiKey=process.env.OPENAI_API_KEY,model=process.en
    }catch(e){return json(res,400,{error:String(e.message||e).slice(0,220)})}
   }
   if(req.method==='GET'&&route==='/api/relay/response'){
-   try{const answer=await readRelay(relayResponsePath);return json(res,200,answer||{ready:false})}
-   catch{return json(res,500,{error:'Cannot read ChatGPT response'})}
+   try{
+    const answer=await readRelay(relayResponsePath);
+    if(Array.isArray(answer?.moves)){
+     // A ChatGPT conversation can plan a whole GPT sequence while the browser tab is sleeping.
+     // Only deliver the queued move matching the latest *browser-submitted* state.
+     const request=await readRelay(relayRequestPath);
+     const next=answer.moves.find(move=>move?.sessionId===request?.sessionId&&move?.stateKey===request?.stateKey);
+     return json(res,200,next||{ready:false});
+    }
+    return json(res,200,answer||{ready:false});
+   }catch{return json(res,500,{error:'Cannot read ChatGPT response'})}
   }
   if(req.method==='GET'&&route==='/api/relay/status'){
    try{const request=await readRelay(relayRequestPath);return json(res,200,{waiting:!!request,sessionId:request?.sessionId||null,stateKey:request?.stateKey||null})}
