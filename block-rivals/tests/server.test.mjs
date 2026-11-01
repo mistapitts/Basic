@@ -9,6 +9,10 @@ async function withServer(options,fn){const server=createServer(options);await n
 test('web server serves game assets, status, no key exposure',()=>withServer({apiKey:''},async url=>{
  const status=await (await fetch(url+'/api/status')).json();assert.deepEqual(status,{apiMode:false,model:null,desktopRelay:true});
  const page=await (await fetch(url+'/')).text();assert(page.includes('Block Rivals'));assert(page.includes('ui.mjs'));
+ const tracked=await fetch(url+'/?utm_source=chatgpt.com&utm_medium=link');assert.equal(tracked.status,200);assert.equal(await tracked.text(),page);
+ const trackedAsset=await fetch(url+'/ui.mjs?cache=1');assert.equal(trackedAsset.status,200);assert.match(await trackedAsset.text(),/render/);
+ const trackedStatus=await fetch(url+'/api/status?ignore=1');assert.equal(trackedStatus.status,200);
+ const notFound=await fetch(url+'/no-page?utm_source=x');assert.equal(notFound.status,404);
  const js=await (await fetch(url+'/engine.mjs')).text();assert(js.includes('legalActions'));
  const hidden=await fetch(url+'/server.mjs');assert.equal(hidden.status,404);
  const unavailable=await fetch(url+'/api/choose',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});assert.equal(unavailable.status,503);
