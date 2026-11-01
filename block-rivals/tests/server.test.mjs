@@ -47,3 +47,26 @@ test('Desktop Commander relay stores validated turn state and serves the matchin
   const human=await fetch(url+'/api/relay/request',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...payload,state:newGame(2)})});assert.equal(human.status,400);
  });}finally{await rm(relayDir,{recursive:true,force:true})}
 });
+
+test('queued ChatGPT moves follow only the latest browser-submitted checksum',async()=>{
+ const relayDir=await mkdtemp(path.join(os.tmpdir(),'block-rivals-queue-'));
+ const hashFor=s=>{const raw=JSON.stringify(gameSummary(s));let h=2166136261;for(let i=0;i<raw.length;i++){h^=raw.charCodeAt(i);h=Math.imul(h,16777619)}return(h>>>0).toString(36)};
+ try{await withServer({apiKey:'',relayDir},async url=>{
+  const first=newGame(1);first.turn=1;
+  const second=applyAction(first,{type:'roll'});
+  const sid='game-abcdef1234567890';
+  const keys=[hashFor(first),hashFor(second)];
+  await writeFile(path.join(relayDir,'relay-turn-response.json'),JSON.stringify({moves:[
+    {sessionId:sid,stateKey:keys[0],choice:0,banter:'Ember rolls'},
+    {sessionId:sid,stateKey:keys[1],choice:0,banter:'Ember continues'}
+  ]}));
+  const send=async state=>fetch(url+'/api/relay/request',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sessionId:sid,stateKey:hashFor(state),state})});
+  assert.equal((await send(first)).status,200);
+  const reply1=await (await fetch(url+'/api/relay/response')).json();assert.equal(reply1.stateKey,keys[0]);
+  assert.equal((await send(second)).status,200);
+  const reply2=await (await fetch(url+'/api/relay/response')).json();assert.equal(reply2.stateKey,keys[1]);
+  const missing=JSON.parse(await readFile(path.join(relayDir,'relay-turn-response.json'),'utf8'));missing.moves.length=1;
+  await writeFile(path.join(relayDir,'relay-turn-response.json'),JSON.stringify(missing));
+  assert.deepEqual(await (await fetch(url+'/api/relay/response')).json(),{ready:false});
+ });}finally{await rm(relayDir,{recursive:true,force:true})}
+});
