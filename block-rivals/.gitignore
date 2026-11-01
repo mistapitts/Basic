@@ -1,0 +1,10 @@
+# Active local match files are never committed.
+relay-turn-request.json
+relay-turn-response.json
+relay-turn-*.json.tmp.*
+relay-plan-progress.json
+
+# Temporary local diagnostic scripts
+relay-probe.mjs
+relay-live-diagnostic.mjs
+relay-plan.mjs
