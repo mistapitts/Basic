@@ -144,8 +144,8 @@ function settle(s,amount,recipient,reason,post={type:'landing'}) {
  const p=currentPlayer(s);invariant(amount>=0&&Number.isInteger(amount),'Invalid payment');
  if(amount===0){resume(s,post);return}
  if(p.cash>=amount){p.cash-=amount;if(recipient==='pot')s.pot+=amount;else if(typeof recipient==='number')s.players[recipient].cash+=amount;
- log(s,`${p.name} paid ${amount} ${recipient==='pot'?'into Vacation Fund':typeof recipient==='number'?`to ${s.players[recipient].name}`:'to the bank'} (${reason}).`);resume(s,post);return}
- s.debt={amount,to:recipient,reason,post};s.phase='debt';log(s,`${p.name} owes ${amount} (${reason}). Mortgage or sell buildings to raise cash.`);
+ log(s,`${p.name} paid $${amount} ${recipient==='pot'?'into Vacation Fund':typeof recipient==='number'?`to ${s.players[recipient].name}`:'to the bank'} (${reason}).`);resume(s,post);return}
+ s.debt={amount,to:recipient,reason,post};s.phase='debt';log(s,`${p.name} owes $${amount} (${reason}). Mortgage or sell buildings to raise cash.`);
 }
 function resume(s,post) {
  if(post?.type==='jailMove'){const p=currentPlayer(s);p.inJail=false;p.jailAttempts=0;move(s,post.steps);return}
@@ -167,19 +167,19 @@ function applyCard(s,card,type){const p=currentPlayer(s);
  case 'nearestUtility':{const utilities=[12,28];const pos=utilities.find(x=>x>p.pos)??12;advance(s,pos,true);const dice=rollDice(s);log(s,`Opportunity utility dice: ${dice[0]} + ${dice[1]}.`);land(s,{rentMult:10,utilityDice:dice[0]+dice[1]});break}
  case 'jail':goToJail(s);break;
  case 'card':p.cards[type]++;finishLanding(s);break;
- case 'collect':p.cash+=card.amount;log(s,`${p.name} received ${card.amount} from the bank.`);finishLanding(s);break;
+ case 'collect':p.cash+=card.amount;log(s,`${p.name} received $${card.amount} from the bank.`);finishLanding(s);break;
  case 'pay':settle(s,card.amount,'pot',card.text);break;
  case 'repairs':{let amount=0;for(const [idx,d] of Object.entries(s.deeds))if(d.owner===p.id&&BOARD[idx].type==='property')amount+=d.buildings===5?card.hotel:d.buildings*card.house;settle(s,amount,'pot','property repairs');break}
  default:throw new Error('Unknown card')
  }
 }
 function land(s,special={}){const p=currentPlayer(s),idx=p.pos,sq=BOARD[idx],d=s.deeds[idx];
- if(d){if(d.owner===null){s.phase='purchase';log(s,`${sq.name} is available for ${sq.price}. Buy or auction it.`)}
+ if(d){if(d.owner===null){s.phase='purchase';log(s,`${sq.name} is available for $${sq.price}. Buy or auction it.`)}
  else if(d.owner!==p.id&&!d.mortgaged){const amt=calculateRent(s,idx,special.utilityDice??s.lastRoll[0]+s.lastRoll[1],special.rentMult||1);settle(s,amt,d.owner,`rent at ${sq.name}`)}
  else finishLanding(s);
  return;}
  switch(sq.type){case 'tax':settle(s,sq.amount,'pot',sq.name);break;
- case 'parking':{const payout=s.pot;s.pot=0;p.cash+=payout;log(s,`${p.name} collected ${payout} from Vacation Fund!`);finishLanding(s);break}
+ case 'parking':{const payout=s.pot;s.pot=0;p.cash+=payout;log(s,`${p.name} collected $${payout} from Vacation Fund!`);finishLanding(s);break}
  case 'toJail':goToJail(s);break;
  case 'chance':case 'chest':applyCard(s,pickCard(s,sq.type),sq.type);break;
  default:finishLanding(s);
@@ -215,7 +215,7 @@ function legalActions(s){if(s.phase==='gameover')return [];const id=actorId(s),p
 }
 const auctionNext=s=>{const a=s.auction;
  if(a.active.length===0){log(s,`${BOARD[a.property].name} was not sold at auction.`);s.auction=null;finishLanding(s);return}
- if(a.active.length===1&&a.high===a.active[0]){const winner=a.high;const price=a.bid;invariant(s.players[winner].cash>=price,'Winner lacks cash');s.players[winner].cash-=price;s.deeds[a.property].owner=winner;log(s,`${s.players[winner].name} won ${BOARD[a.property].name} for ${price}.`);s.auction=null;finishLanding(s);return}
+ if(a.active.length===1&&a.high===a.active[0]){const winner=a.high;const price=a.bid;invariant(s.players[winner].cash>=price,'Winner lacks cash');s.players[winner].cash-=price;s.deeds[a.property].owner=winner;log(s,`${s.players[winner].name} won ${BOARD[a.property].name} for $${price}.`);s.auction=null;finishLanding(s);return}
  const all=a.active.filter(id=>id!==a.high);
  if(!all.length){if(a.high!==null){a.active=[a.high];auctionNext(s)}else{s.auction=null;finishLanding(s)}return}
  for(let i=1;i<=4;i++){const id=(a.actor+i)%4;if(all.includes(id)){a.actor=id;return}}
@@ -233,10 +233,10 @@ const validateOffer=(s,a)=>{const from=s.turn,to=a.to;invariant(Number.isInteger
  let fromInterest=take.reduce((v,id)=>v+(s.deeds[id].mortgaged?Math.ceil(BOARD[id].price*.05):0),0);
  invariant(s.players[from].cash-giveCash+takeCash>=fromInterest&&s.players[to].cash-takeCash+giveCash>=toInterest,'Not enough cash for mortgage transfer fees');
  return {...a,give,take,giveCash,takeCash,from,to,fromInterest,toInterest};};
-const mortgageProperty=(s,id)=>{const d=s.deeds[id],sq=BOARD[id];d.mortgaged=true;const gain=sq.price/2;s.players[s.turn].cash+=gain;log(s,`${currentPlayer(s).name} mortgaged ${sq.name} for ${gain}.`)};
+const mortgageProperty=(s,id)=>{const d=s.deeds[id],sq=BOARD[id];d.mortgaged=true;const gain=sq.price/2;s.players[s.turn].cash+=gain;log(s,`${currentPlayer(s).name} mortgaged ${sq.name} for $${gain}.`)};
 const sellBuilding=(s,id)=>{const d=s.deeds[id],cost=GROUPS[BOARD[id].group].build;s.players[s.turn].cash+=cost/2;
  if(d.buildings===5){d.buildings=4;s.bankHotels++;s.bankHouses-=4}else{d.buildings--;s.bankHouses++}
- log(s,`${currentPlayer(s).name} sold one building on ${BOARD[id].name} for ${cost/2}.`)};
+ log(s,`${currentPlayer(s).name} sold one building on ${BOARD[id].name} for $${cost/2}.`)};
 function bankrupt(s){const p=currentPlayer(s),debt=s.debt,creditor=typeof debt.to==='number'?debt.to:null;invariant(p.cash<debt.amount,'You can pay the debt instead of declaring bankruptcy');
  for(const idx of ownDeeds(s,p.id)){
   const d=s.deeds[idx];if(BOARD[idx].type==='property'&&d.buildings){p.cash+=d.buildings*GROUPS[BOARD[idx].group].build/2;d.buildings=0}
@@ -262,15 +262,15 @@ function applyAction(input,action){invariant(input&&action&&typeof action.type==
   break}
  case 'payBail':settle(s,50,'pot','jail bail',{type:'afterBail'});break;
  case 'useCard':{let deck=p.cards.chance?'chance':'chest';invariant(p.cards[deck]>0,'No card');p.cards[deck]--;s.decks[deck].push(CARDS[deck].findIndex(c=>c.kind==='card'));p.inJail=false;p.jailAttempts=0;s.phase='pre';log(s,`${p.name} used a get-out-of-jail card.`);break}
- case 'buy':p.cash-=BOARD[p.pos].price;s.deeds[p.pos].owner=id;log(s,`${p.name} bought ${BOARD[p.pos].name} for ${BOARD[p.pos].price}.`);finishLanding(s);break;
+ case 'buy':p.cash-=BOARD[p.pos].price;s.deeds[p.pos].owner=id;log(s,`${p.name} bought ${BOARD[p.pos].name} for $${BOARD[p.pos].price}.`);finishLanding(s);break;
  case 'startAuction':s.phase='auction';s.auction={property:p.pos,bid:0,high:null,actor:s.turn,active:s.players.filter(x=>!x.bankrupt).map(x=>x.id)};log(s,`Auction started for ${BOARD[p.pos].name}.`);break;
- case 'bid':{const a=s.auction;invariant(a.actor===id,'Not your auction turn');a.bid=action.amount;a.high=id;log(s,`${p.name} bid ${a.bid}.`);auctionNext(s);break}
+ case 'bid':{const a=s.auction;invariant(a.actor===id,'Not your auction turn');a.bid=action.amount;a.high=id;log(s,`${p.name} bid $${a.bid}.`);auctionNext(s);break}
  case 'passAuction':{const a=s.auction;a.active=a.active.filter(x=>x!==id);log(s,`${p.name} passed the auction.`);auctionNext(s);break}
  case 'mortgage':mortgageProperty(s,action.property);s.sideActions++;break;
- case 'unmortgage':{const d=s.deeds[action.property],amount=Math.ceil(BOARD[action.property].price*.55);p.cash-=amount;d.mortgaged=false;s.sideActions++;log(s,`${p.name} redeemed ${BOARD[action.property].name} for ${amount}.`);break}
+ case 'unmortgage':{const d=s.deeds[action.property],amount=Math.ceil(BOARD[action.property].price*.55);p.cash-=amount;d.mortgaged=false;s.sideActions++;log(s,`${p.name} redeemed ${BOARD[action.property].name} for $${amount}.`);break}
  case 'build':{const idx=action.property,d=s.deeds[idx],cost=GROUPS[BOARD[idx].group].build;p.cash-=cost;
   if(d.buildings===4){d.buildings=5;s.bankHotels--;s.bankHouses+=4}else{d.buildings++;s.bankHouses--}
-  s.sideActions++;log(s,`${p.name} built ${d.buildings===5?'a hotel':'a house'} on ${BOARD[idx].name} for ${cost}.`);break}
+  s.sideActions++;log(s,`${p.name} built ${d.buildings===5?'a hotel':'a house'} on ${BOARD[idx].name} for $${cost}.`);break}
  case 'sell':sellBuilding(s,action.property);s.sideActions++;break;
  case 'payDebt':{const debt=s.debt;s.debt=null;settle(s,debt.amount,debt.to,debt.reason,debt.post);break}
  case 'bankrupt':bankrupt(s);break;
@@ -300,8 +300,7 @@ function playerNetWorth(s,id){const p=s.players[id];return p.cash+ownDeeds(s,id)
 
 const $=sel=>document.querySelector(sel);
 const escapeHtml=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const money=n=>'</body></html>
-+Number(n||0).toLocaleString('en-US');
+const money=n=>'$'+Number(n||0).toLocaleString('en-US');
 const storageKey='block-rivals-v1';
 let state;
 try{const raw=JSON.parse(localStorage.getItem(storageKey));if(raw){assertInvariants(raw);state=raw}}catch(e){console.warn('Save unavailable:',e)}
@@ -314,8 +313,7 @@ function save(){try{localStorage.setItem(storageKey,JSON.stringify(state))}catch
 function phaseLabel(){return ({pre:'Ready to roll',post:state.extraRoll?'Roll again':'Finish your turn',purchase:'Buy or auction?',auction:'Live auction',debt:'Payment due',trade:'Trade proposal',gameover:'Game over'})[state.phase]||state.phase}
 function phaseHelp(){const p=state.players[state.turn],space=BOARD[p.pos];switch(state.phase){case 'pre':return p.inJail?'Pay a $50 fine, play a jail pass, or attempt doubles.':'Roll the dice, or improve/mortgage a property first.';case 'post':return state.extraRoll?'Doubles! You earned an extra roll.':'You can manage your portfolio, offer a trade, or end your turn.';case 'purchase':return `${space.name} can be purchased for ${money(space.price)}. Decline and it goes to an open ascending auction.`;case 'debt':return `${p.name} owes ${money(state.debt.amount)} (${state.debt.reason}). Raise cash to pay, or go bankrupt.`;case 'trade':return `${state.players[state.trade.from].name} made an offer to ${state.players[state.trade.to].name}.`;case 'auction':return `${BOARD[state.auction.property].name} • highest bid ${money(state.auction.bid)}${state.auction.high!==null?' by '+state.players[state.auction.high].name:''}.`;default:return 'The last solvent player wins.'}}
 function tilePos(id){if(id<=10)return {col:11-id,row:11};if(id<=20)return {col:1,row:11-(id-10)};if(id<=30)return {col:id-20+1,row:1};return {col:11,row:id-30+1}}
-function iconFor(sq){return ({go:'↗',jail:'🔒',toJail:'🚓',parking:'🏝',chance:'?',chest:'🎁',tax:'</body></html>
-,station:'🚆',utility:'⚡',property:'⌂'})[sq.type]||'•'}
+function iconFor(sq){return ({go:'↗',jail:'🔒',toJail:'🚓',parking:'🏝',chance:'?',chest:'🎁',tax:'$',station:'🚆',utility:'⚡',property:'⌂'})[sq.type]||'•'}
 function renderBoard(){const pieces=state.players.filter(p=>!p.bankrupt).reduce((o,p)=>(o[p.pos]??=[]).push(p.id)&&o,{});let tiles='';
  BOARD.forEach((sq,id)=>{const pos=tilePos(id),d=state.deeds[id],color=d?.owner!==null&&d?.owner!==undefined?PLAYER_COLORS[d.owner]:null;
  const pegs=(pieces[id]||[]).map(p=>`<span class="pawn" title="${escapeHtml(state.players[p].name)}" style="background:${PLAYER_COLORS[p]}"></span>`).join('');
