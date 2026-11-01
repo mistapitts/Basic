@@ -17,10 +17,12 @@ export function createServer({apiKey=process.env.OPENAI_API_KEY,model=process.en
  const readRelay=async file=>{try{return JSON.parse(await readFile(file,'utf8'))}catch(e){if(e.code==='ENOENT')return null;throw e}};
  const writeRelay=async(file,value)=>{await mkdir(relayDir,{recursive:true});const tmp=file+'.tmp.'+process.pid+'.'+Date.now();await writeFile(tmp,JSON.stringify(value,null,2)+'\n','utf8');await rename(tmp,file)};
  return http.createServer(async(req,res)=>{
+  // Match the pathname rather than the raw URL: browsers may append tracking/query parameters.
+  const route=new URL(req.url,'http://localhost').pathname;
   // Requiring JSON prevents cross-site form POSTs from spending API credits.
   if(req.headers.origin&&!['http://localhost:'+req.socket.localPort,'http://127.0.0.1:'+req.socket.localPort].includes(req.headers.origin))return json(res,403,{error:'Origin not allowed'});
-  if(req.method==='GET'&&req.url==='/api/status')return json(res,200,{apiMode:!!apiKey,model:apiKey?model:null,desktopRelay:true});
-  if(req.method==='POST'&&req.url==='/api/relay/request'){
+  if(req.method==='GET'&&route==='/api/status')return json(res,200,{apiMode:!!apiKey,model:apiKey?model:null,desktopRelay:true});
+  if(req.method==='POST'&&route==='/api/relay/request'){
    if(!req.headers['content-type']?.startsWith('application/json'))return json(res,415,{error:'JSON request required'});
    try{
     let body='';for await(const chunk of req){body+=chunk;if(body.length>260000)throw new Error('Request too large')}
@@ -32,15 +34,15 @@ export function createServer({apiKey=process.env.OPENAI_API_KEY,model=process.en
     await writeRelay(relayRequestPath,saved);return json(res,200,{ok:true,stateKey:key});
    }catch(e){return json(res,400,{error:String(e.message||e).slice(0,220)})}
   }
-  if(req.method==='GET'&&req.url==='/api/relay/response'){
+  if(req.method==='GET'&&route==='/api/relay/response'){
    try{const answer=await readRelay(relayResponsePath);return json(res,200,answer||{ready:false})}
    catch{return json(res,500,{error:'Cannot read ChatGPT response'})}
   }
-  if(req.method==='GET'&&req.url==='/api/relay/status'){
+  if(req.method==='GET'&&route==='/api/relay/status'){
    try{const request=await readRelay(relayRequestPath);return json(res,200,{waiting:!!request,sessionId:request?.sessionId||null,stateKey:request?.stateKey||null})}
    catch{return json(res,500,{error:'Cannot read relay status'})}
   }
-  if(req.method==='POST'&&req.url==='/api/choose'){
+  if(req.method==='POST'&&route==='/api/choose'){
    if(!apiKey)return json(res,503,{error:'No server-side OPENAI_API_KEY configured. Use ChatGPT chat relay mode.'});
    if(!req.headers['content-type']?.startsWith('application/json'))return json(res,415,{error:'JSON request required'});
    try{
@@ -64,8 +66,8 @@ export function createServer({apiKey=process.env.OPENAI_API_KEY,model=process.en
     return json(res,200,{stateKey:key,choice:decision.choice,banter:String(decision.banter||'').slice(0,180)});
    }catch(e){return json(res,400,{error:String(e.message||e).slice(0,300)})}
   }
-  if(req.method==='GET'&&files.has(req.url)){
-   const name=files.get(req.url);try{const body=await readFile(path.join(root,name));res.writeHead(200,{'Content-Type':mime[path.extname(name)],'X-Content-Type-Options':'nosniff','Cache-Control':'no-store'});res.end(body)}catch{json(res,404,{error:'File unavailable'})}
+  if(req.method==='GET'&&files.has(route)){
+   const name=files.get(route);try{const body=await readFile(path.join(root,name));res.writeHead(200,{'Content-Type':mime[path.extname(name)],'X-Content-Type-Options':'nosniff','Cache-Control':'no-store'});res.end(body)}catch{json(res,404,{error:'File unavailable'})}
   }else json(res,404,{error:'Not found'});
  });
 }
